@@ -1,6 +1,7 @@
 pandas
 numpy
 streamlit
+altair<5
 streamlit-autorefresh
 requests
 plotly
