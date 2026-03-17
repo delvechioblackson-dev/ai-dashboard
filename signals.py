@@ -1495,7 +1495,7 @@ def main():
             })
             st.dataframe(
                 display_df,
-                width='stretch',
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -1530,13 +1530,13 @@ def main():
 
                         st.dataframe(
                             tf_display_df,
-                            width='stretch',
+                            use_container_width=True,
                             hide_index=True,
                         )
 
                         with st.expander(f"Details & motivatie voor {tf}"):
                             detail_columns = display_columns + [
-                                'stop_loss', 'take_profit', 'zone_strength', 'nearest_key_level', 'confidence_notes'
+                                'zone_strength', 'nearest_key_level', 'confidence_notes'
                             ]
                             tf_detail_df = tf_df[[col for col in detail_columns if col in tf_df.columns]].copy()
                             tf_detail_df = tf_detail_df.rename(columns={
@@ -1546,7 +1546,7 @@ def main():
                             })
                             st.dataframe(
                                 tf_detail_df,
-                                width='stretch',
+                                use_container_width=True,
                                 hide_index=True,
                             )
         else:
@@ -1558,13 +1558,13 @@ def main():
             any_ms = True
             st.subheader("📐 M5 Market Structure / Supply-Demand Signals")
             ms5_df = pd.DataFrame(m5_ms_signals)
-            st.dataframe(ms5_df, width='stretch', hide_index=True)
+            st.dataframe(ms5_df, use_container_width=True, hide_index=True)
 
         if m15_ms_signals:
             any_ms = True
             st.subheader("📐 M15 Market Structure / Supply-Demand Signals")
             ms_df = pd.DataFrame(m15_ms_signals)
-            st.dataframe(ms_df, width='stretch', hide_index=True)
+            st.dataframe(ms_df, use_container_width=True, hide_index=True)
 
         if not any_ms and show_supply_demand and supply_demand_zones:
             st.info("No M5/M15/M30 market-structure signals for the current data.")
@@ -1716,7 +1716,7 @@ def main():
 
                             st.dataframe(
                                 tf_df.style.apply(highlight_result, axis=1),
-                                width='stretch',
+                                use_container_width=True,
                             )
 
         # Main chart
@@ -1842,7 +1842,7 @@ def main():
         fig.update_xaxes(title_text="Time", row=1, col=1)
         fig.update_yaxes(title_text="Price", row=1, col=1, tickformat=".5f")
         
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
