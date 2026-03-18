@@ -15,6 +15,7 @@ APP_TIMEZONE = "Europe/Amsterdam"
 TWELVEDATA_MIN_FETCH_SECONDS = 60
 ALERT_PRICE_TOLERANCE = 0.0002
 ALERT_TIME_TOLERANCE_MINUTES = 3
+ALERT_REPEAT_COOLDOWN_MINUTES = 30
 
 
 def get_config_value(name, fallback=""):
@@ -991,6 +992,23 @@ def format_timestamp(value):
     return timestamp.strftime("%d-%m-%y | %H:%M:%S")
 
 
+def get_signal_setup_label(signal):
+    setup_value = str(signal.get('setup', '')).strip()
+    signal_type = str(signal.get('type', '')).strip()
+
+    if signal_type and signal_type.lower() == 'technical pattern':
+        return 'Technical Pattern'
+
+    if signal_type:
+        type_parts = signal_type.split()
+        if type_parts and type_parts[0].lower() in {'1m', '5m', '15m', '30m'}:
+            signal_type = ' '.join(type_parts[1:]).strip()
+        if signal_type:
+            return signal_type
+
+    return setup_value or 'Unknown'
+
+
 def join_human_readable(items):
     cleaned_items = [str(item).strip() for item in items if str(item).strip()]
     if not cleaned_items:
@@ -1558,7 +1576,7 @@ def main():
                     if (
                         pd.notna(last_group_timestamp)
                         and pd.notna(latest_cluster_timestamp)
-                        and latest_cluster_timestamp - last_group_timestamp <= pd.Timedelta(minutes=ALERT_TIME_TOLERANCE_MINUTES)
+                        and latest_cluster_timestamp - last_group_timestamp <= pd.Timedelta(minutes=ALERT_REPEAT_COOLDOWN_MINUTES)
                     ):
                         for alert_id in cluster['alert_ids']:
                             if alert_id:
@@ -1862,6 +1880,8 @@ def main():
                 results.append({
                     'timestamp': ts,
                     'signal': direction,
+                    'setup': sig.get('setup', ''),
+                    'setup_label': get_signal_setup_label(sig),
                     'type': sig.get('type'),
                     'timeframe': sig.get('timeframe', '1m'),
                     'price': entry_price,
@@ -1891,6 +1911,33 @@ def main():
                 st.markdown(
                     f"**Starting Balance:** {starting_balance:.2f} → **Final Balance:** {equity:.2f}"
                 )
+
+                closed_results_df = results_df[results_df['result'].isin(['Win', 'Loss'])].copy()
+                if not closed_results_df.empty and 'setup_label' in closed_results_df.columns:
+                    setup_stats_df = (
+                        closed_results_df
+                        .groupby('setup_label', dropna=False)
+                        .agg(
+                            trades=('result', 'count'),
+                            wins=('result', lambda values: int((values == 'Win').sum())),
+                            losses=('result', lambda values: int((values == 'Loss').sum())),
+                            total_pips=('pips', 'sum'),
+                        )
+                        .reset_index()
+                    )
+                    setup_stats_df['win_rate'] = ((setup_stats_df['wins'] / setup_stats_df['trades']) * 100).round(1)
+                    setup_stats_df['loss_rate'] = ((setup_stats_df['losses'] / setup_stats_df['trades']) * 100).round(1)
+                    setup_stats_df = setup_stats_df.sort_values(
+                        by=['win_rate', 'trades', 'setup_label'],
+                        ascending=[False, False, True],
+                    ).reset_index(drop=True)
+
+                    st.markdown("### 📊 Win/Loss per setup")
+                    st.dataframe(
+                        setup_stats_df.rename(columns={'setup_label': 'setup'}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
                 def highlight_result(row):
                     if row['result'] == 'Win':
