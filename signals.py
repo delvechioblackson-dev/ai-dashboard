@@ -929,6 +929,8 @@ def generate_sell_signals(df, pip_size=0.0001):
     signals = []
     for i in range(1, len(df)):
         entry_price = float(df.iloc[i]['Close'])
+        body_ratio = safe_divide(df.iloc[i]['Body_Size'], df.iloc[i]['Candle_Range'], default=0.0)
+        rsi_value = float(df.iloc[i].get('RSI_14', 50)) if pd.notna(df.iloc[i].get('RSI_14', np.nan)) else 50.0
 
         # SELL setup: lower highs/lows in a downtrend
         if df['Lower_High'][i] and df['Lower_Low'][i]:
@@ -941,17 +943,30 @@ def generate_sell_signals(df, pip_size=0.0001):
                     risk = entry_price * 0.001
                 take_profit = entry_price - 2 * risk
 
+                probability_score = 55
+                if rsi_value < 45:
+                    probability_score += 8
+                if body_ratio >= 0.5:
+                    probability_score += 6
+                if df.iloc[i]['Close'] < df.iloc[i]['Open']:
+                    probability_score += 4
+                success_probability = int(round(clamp(probability_score, 35, 85)))
+
                 stop_loss, take_profit = apply_pip_limits(
                     entry_price, stop_loss, take_profit, 'Sell', pip_size
                 )
                 signals.append({
                     'timestamp': df.iloc[i]['Datetime'],
                     'signal': 'Sell',
+                    'setup': 'Technical Pattern',
                     'type': 'Technical Pattern',
                     'price': entry_price,
                     'timeframe': '1m',
                     'stop_loss': float(round(stop_loss, 5)),
                     'take_profit': float(round(take_profit, 5)),
+                    'risk_reward': f"{round(abs(take_profit - entry_price) / max(abs(entry_price - stop_loss), pip_size), 2)}:1",
+                    'success_probability': success_probability,
+                    'confidence_notes': 'trend continuation met lower highs/lows',
                 })
 
         # BUY setup: higher highs/lows in an uptrend
@@ -965,17 +980,30 @@ def generate_sell_signals(df, pip_size=0.0001):
                     risk = entry_price * 0.001
                 take_profit = entry_price + 2 * risk
 
+                probability_score = 55
+                if rsi_value > 55:
+                    probability_score += 8
+                if body_ratio >= 0.5:
+                    probability_score += 6
+                if df.iloc[i]['Close'] > df.iloc[i]['Open']:
+                    probability_score += 4
+                success_probability = int(round(clamp(probability_score, 35, 85)))
+
                 stop_loss, take_profit = apply_pip_limits(
                     entry_price, stop_loss, take_profit, 'Buy', pip_size
                 )
                 signals.append({
                     'timestamp': df.iloc[i]['Datetime'],
                     'signal': 'Buy',
+                    'setup': 'Technical Pattern',
                     'type': 'Technical Pattern',
                     'price': entry_price,
                     'timeframe': '1m',
                     'stop_loss': float(round(stop_loss, 5)),
                     'take_profit': float(round(take_profit, 5)),
+                    'risk_reward': f"{round(abs(take_profit - entry_price) / max(abs(entry_price - stop_loss), pip_size), 2)}:1",
+                    'success_probability': success_probability,
+                    'confidence_notes': 'trend continuation met higher highs/lows',
                 })
     return signals
 
@@ -984,6 +1012,12 @@ def format_trade_level(value):
     if value is None or pd.isna(value):
         return "n/a"
     return f"{float(value):.5f}"
+
+
+def format_probability(value):
+    if value is None or pd.isna(value):
+        return "n/a"
+    return f"{int(round(float(value)))}%"
 
 
 def format_timestamp(value):
@@ -1887,7 +1921,7 @@ def main():
                     st.error(f"SL: {format_trade_level(best_signal.get('stop_loss'))}")
                     st.info(f"TP: {format_trade_level(best_signal.get('take_profit'))}")
                     st.caption(
-                        f"Kans: {best_signal.get('success_probability', 0)}% | RR: {best_signal.get('risk_reward', 'n/a')}"
+                        f"Kans: {format_probability(best_signal.get('success_probability'))} | RR: {best_signal.get('risk_reward', 'n/a')}"
                     )
 
             display_df = top_setups[[col for col in display_columns if col in top_setups.columns]].copy()
@@ -1898,6 +1932,8 @@ def main():
             })
             if 'timestamp' in display_df.columns:
                 display_df['timestamp'] = display_df['timestamp'].apply(format_timestamp)
+            if 'success_probability' in display_df.columns:
+                display_df['success_probability'] = display_df['success_probability'].apply(format_probability)
             st.dataframe(
                 display_df,
                 use_container_width=True,
@@ -1934,6 +1970,8 @@ def main():
                             })
                             if 'timestamp' in tf_display_df.columns:
                                 tf_display_df['timestamp'] = tf_display_df['timestamp'].apply(format_timestamp)
+                            if 'success_probability' in tf_display_df.columns:
+                                tf_display_df['success_probability'] = tf_display_df['success_probability'].apply(format_probability)
 
                             st.dataframe(
                                 tf_display_df,
@@ -1953,6 +1991,8 @@ def main():
                                 })
                                 if 'timestamp' in tf_detail_df.columns:
                                     tf_detail_df['timestamp'] = tf_detail_df['timestamp'].apply(format_timestamp)
+                                if 'success_probability' in tf_detail_df.columns:
+                                    tf_detail_df['success_probability'] = tf_detail_df['success_probability'].apply(format_probability)
                                 st.dataframe(
                                     tf_detail_df,
                                     use_container_width=True,
