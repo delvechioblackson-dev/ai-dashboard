@@ -981,6 +981,27 @@ def format_trade_level(value):
         return "n/a"
     return f"{float(value):.5f}"
 
+
+def get_timeframe_minutes(timeframe_label):
+    mapping = {
+        '1m': 1,
+        '5m': 5,
+        '15m': 15,
+        '30m': 30,
+    }
+    return mapping.get(str(timeframe_label).lower(), 1)
+
+
+def build_signal_alert_id(signal, instrument_label):
+    timestamp = pd.to_datetime(signal.get('timestamp'), errors='coerce')
+    timestamp_value = timestamp.isoformat() if pd.notna(timestamp) else 'na'
+    timeframe = str(signal.get('timeframe', ''))
+    direction = str(signal.get('signal', ''))
+    signal_type = str(signal.get('type', ''))
+    price = signal.get('price', np.nan)
+    price_value = f"{float(price):.5f}" if pd.notna(price) else 'na'
+    return "|".join([instrument_label, timeframe, direction, signal_type, price_value, timestamp_value])
+
 # Streamlit app main function
 def main():
     st.set_page_config(page_title="Supply/Demand Trading Dashboard", page_icon="📊", layout="wide")
@@ -1349,47 +1370,56 @@ def main():
             signal_df_alert = pd.DataFrame(all_signals).copy()
             if 'timestamp' in signal_df_alert.columns:
                 signal_df_alert['timestamp'] = pd.to_datetime(signal_df_alert['timestamp'])
+            signal_df_alert['alert_id'] = signal_df_alert.apply(
+                lambda row: build_signal_alert_id(row, instrument_label),
+                axis=1,
+            )
 
             # Unieke key per instrument, zodat elk valutapaar apart telt
             alert_key = f"last_alert_ts::{instrument_label}"
+            sent_alerts_key = f"sent_alert_ids::{instrument_label}"
+            sent_alert_ids = set(st.session_state.get(sent_alerts_key, []))
 
             if alert_key not in st.session_state:
-                # Eerste keer alerts inschakelen: beschouw alle bestaande signalen als "oud"
-                # zodat je alleen echt nieuwe signalen vanaf nu via Telegram krijgt.
                 if 'timestamp' in signal_df_alert.columns and not signal_df_alert['timestamp'].empty:
-                    st.session_state[alert_key] = signal_df_alert['timestamp'].max()
+                    latest_signal_ts = signal_df_alert['timestamp'].max()
+                    bootstrap_minutes = max(get_timeframe_minutes(primary_label) * 2, 3)
+                    bootstrap_ts = latest_signal_ts - pd.Timedelta(minutes=bootstrap_minutes)
+                    st.session_state[alert_key] = bootstrap_ts
+                    st.info("Telegram-alerts geactiveerd: recente signalen worden nu verstuurd, daarna alleen nieuwe signalen.")
                 else:
                     st.session_state[alert_key] = pd.Timestamp.utcnow()
-                st.info("Telegram-alerts geactiveerd: je ontvangt alleen nieuwe signalen vanaf nu.")
-            else:
-                last_ts = st.session_state[alert_key]
 
-                new_mask = signal_df_alert['timestamp'] > last_ts
-                new_signals = signal_df_alert[new_mask]
+            last_ts = st.session_state[alert_key]
+            new_mask = signal_df_alert['timestamp'] > last_ts
+            unsent_mask = ~signal_df_alert['alert_id'].isin(sent_alert_ids)
+            new_signals = signal_df_alert[new_mask & unsent_mask]
 
-                if not new_signals.empty:
-                    # Stuur per signaal een korte alert
-                    for _, sig in new_signals.sort_values('timestamp').iterrows():
-                        tf = sig.get('timeframe', primary_label)
-                        direction = sig.get('signal', '')
-                        sig_type = sig.get('type', '')
-                        price = sig.get('price', np.nan)
-                        stop_loss = sig.get('stop_loss', np.nan)
-                        take_profit = sig.get('take_profit', np.nan)
-                        ts_str = sig.get('timestamp')
+            if not new_signals.empty:
+                # Stuur per signaal een korte alert
+                for _, sig in new_signals.sort_values('timestamp').iterrows():
+                    tf = sig.get('timeframe', primary_label)
+                    direction = sig.get('signal', '')
+                    sig_type = sig.get('type', '')
+                    price = sig.get('price', np.nan)
+                    stop_loss = sig.get('stop_loss', np.nan)
+                    take_profit = sig.get('take_profit', np.nan)
+                    ts_str = sig.get('timestamp')
 
-                        sl_text = f"SL {stop_loss:.5f}" if pd.notna(stop_loss) else "SL n/a"
-                        tp_text = f"TP {take_profit:.5f}" if pd.notna(take_profit) else "TP n/a"
-                        msg = (
-                            f"{instrument_label} | {tf} {direction} @ {price:.5f} | "
-                            f"{sl_text} | {tp_text} | {sig_type} | {ts_str}"
-                        )
-                        send_telegram_alert(msg)
+                    sl_text = f"SL {stop_loss:.5f}" if pd.notna(stop_loss) else "SL n/a"
+                    tp_text = f"TP {take_profit:.5f}" if pd.notna(take_profit) else "TP n/a"
+                    msg = (
+                        f"{instrument_label} | {tf} {direction} @ {price:.5f} | "
+                        f"{sl_text} | {tp_text} | {sig_type} | {ts_str}"
+                    )
+                    send_telegram_alert(msg)
+                    sent_alert_ids.add(sig['alert_id'])
 
-                    # Toon ook een korte samenvatting in de UI
-                    st.success(f"🔔 {len(new_signals)} nieuwe signalen verstuurd als alert.")
+                # Toon ook een korte samenvatting in de UI
+                st.success(f"🔔 {len(new_signals)} nieuwe signalen verstuurd als alert.")
 
-                    st.session_state[alert_key] = new_signals['timestamp'].max()
+                st.session_state[alert_key] = new_signals['timestamp'].max()
+                st.session_state[sent_alerts_key] = list(sent_alert_ids)
 
         # Nieuwssectie onder de signalen
         if show_news:
