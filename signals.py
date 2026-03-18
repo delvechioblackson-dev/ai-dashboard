@@ -16,6 +16,7 @@ TWELVEDATA_MIN_FETCH_SECONDS = 60
 ALERT_PRICE_TOLERANCE = 0.0002
 ALERT_TIME_TOLERANCE_MINUTES = 3
 ALERT_REPEAT_COOLDOWN_MINUTES = 30
+ALERT_REPEAT_PRICE_TOLERANCE = 0.0005
 
 
 def get_config_value(name, fallback=""):
@@ -1087,6 +1088,38 @@ def build_alert_group_signature(signal, price_tolerance=ALERT_PRICE_TOLERANCE):
     ])
 
 
+def build_repeat_alert_signature(signal, instrument_label, price_tolerance=ALERT_REPEAT_PRICE_TOLERANCE):
+    def _bucket(value):
+        if pd.isna(value):
+            return 'na'
+        return str(int(round(float(value) / price_tolerance)))
+
+    return "|".join([
+        str(instrument_label),
+        str(signal.get('timeframe', '')),
+        str(signal.get('signal', '')),
+        _bucket(signal.get('price', np.nan)),
+        _bucket(signal.get('stop_loss', np.nan)),
+        _bucket(signal.get('take_profit', np.nan)),
+    ])
+
+
+def prune_recent_alert_groups(recent_alert_groups, max_age_minutes=ALERT_REPEAT_COOLDOWN_MINUTES):
+    if not recent_alert_groups:
+        return {}
+
+    cutoff_timestamp = pd.Timestamp.utcnow() - pd.Timedelta(minutes=max_age_minutes)
+    pruned_groups = {}
+
+    for signature, timestamp_value in recent_alert_groups.items():
+        parsed_timestamp = pd.to_datetime(timestamp_value, errors='coerce', utc=True)
+        if pd.isna(parsed_timestamp) or parsed_timestamp < cutoff_timestamp:
+            continue
+        pruned_groups[signature] = parsed_timestamp.isoformat()
+
+    return pruned_groups
+
+
 def cluster_signals_for_alerts(signal_df, price_tolerance=ALERT_PRICE_TOLERANCE, time_tolerance_minutes=ALERT_TIME_TOLERANCE_MINUTES):
     if signal_df is None or signal_df.empty:
         return []
@@ -1175,19 +1208,157 @@ def build_signal_alert_id(signal, instrument_label):
     price_value = f"{float(price):.5f}" if pd.notna(price) else 'na'
     return "|".join([instrument_label, timeframe, direction, signal_type, price_value, timestamp_value])
 
+
+def inject_dashboard_styles():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --accent-primary: #3d6f96;
+            --accent-secondary: #c7ddee;
+            --accent-soft: #eef5fb;
+            --accent-warm: #f8f2e7;
+            --surface-card: rgba(255, 255, 255, 0.78);
+            --surface-card-strong: rgba(255, 255, 255, 0.92);
+            --border-soft: rgba(61, 111, 150, 0.18);
+            --text-main: #213547;
+            --text-muted: #63788c;
+        }
+
+        .stApp {
+            background: linear-gradient(180deg, #f5f9fd 0%, #fbfdff 35%, #f6f8fb 100%);
+            color: var(--text-main);
+        }
+
+        .block-container {
+            padding-top: 1.4rem;
+        }
+
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #edf4fa 0%, #f8fbff 100%);
+            border-right: 1px solid rgba(61, 111, 150, 0.12);
+        }
+
+        div[data-testid="stMetric"] {
+            background: linear-gradient(180deg, var(--surface-card-strong) 0%, var(--surface-card) 100%);
+            border: 1px solid var(--border-soft);
+            border-radius: 16px;
+            padding: 0.9rem 1rem;
+            box-shadow: 0 8px 24px rgba(31, 53, 71, 0.05);
+        }
+
+        div[data-testid="stMetricLabel"] {
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        div[data-testid="stMetricValue"] {
+            color: var(--text-main);
+        }
+
+        .dashboard-intro {
+            background: linear-gradient(135deg, rgba(61, 111, 150, 0.10) 0%, rgba(248, 242, 231, 0.70) 100%);
+            border: 1px solid rgba(61, 111, 150, 0.14);
+            border-radius: 18px;
+            padding: 1rem 1.15rem;
+            margin: 0.4rem 0 1rem 0;
+            box-shadow: 0 10px 30px rgba(31, 53, 71, 0.04);
+        }
+
+        .dashboard-intro-title {
+            color: var(--accent-primary);
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 0.35rem;
+        }
+
+        .dashboard-intro-text {
+            color: var(--text-main);
+            margin: 0;
+            line-height: 1.55;
+        }
+
+        .dashboard-intro-text strong {
+            color: var(--accent-primary);
+        }
+
+        h2, h3 {
+            color: #284b68;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.45rem;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            background: rgba(61, 111, 150, 0.07);
+            border: 1px solid rgba(61, 111, 150, 0.10);
+            border-radius: 12px 12px 0 0;
+            color: var(--text-muted);
+            padding: 0.55rem 0.95rem;
+        }
+
+        .stTabs [aria-selected="true"] {
+            background: rgba(61, 111, 150, 0.16) !important;
+            color: var(--accent-primary) !important;
+            font-weight: 700;
+        }
+
+        div[data-testid="stDataFrame"],
+        div[data-testid="stTable"] {
+            background: var(--surface-card);
+            border: 1px solid var(--border-soft);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 24px rgba(31, 53, 71, 0.04);
+        }
+
+        div[data-testid="stDataFrame"] thead tr th,
+        div[data-testid="stTable"] thead tr th {
+            background: rgba(61, 111, 150, 0.08) !important;
+            color: #355a78 !important;
+        }
+
+        div[data-testid="stExpander"] {
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+        }
+
+        div[data-testid="stAlert"] {
+            border-radius: 14px;
+            border-width: 1px;
+        }
+
+        .stCaption {
+            color: var(--text-muted);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # Streamlit app main function
 def main():
     st.set_page_config(page_title="Supply/Demand Trading Dashboard", page_icon="📊", layout="wide")
+    inject_dashboard_styles()
     st.title("📊 Advanced Supply/Demand Zone Trading Dashboard")
     
-    st.markdown("""
-    **Features:**
-    - 📈 Live Forex candles only
-    - 🎯 Supply & Demand Zone Detection
-    - 🧭 Multi-timeframe price-action signals
-    - 📰 Optional news sentiment filter
-    - 🔔 Telegram alerts for new signals
-    """)
+    st.markdown(
+        """
+        <div class="dashboard-intro">
+            <div class="dashboard-intro-title">Overzicht dashboard</div>
+            <p class="dashboard-intro-text">
+                <strong>📈 Live Forex candles only</strong> ·
+                <strong>🎯 Supply &amp; Demand zones</strong> ·
+                <strong>🧭 Multi-timeframe signalanalyse</strong> ·
+                <strong>📰 Nieuwsfilter</strong> ·
+                <strong>🔔 Telegram alerts</strong>
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Sidebar settings
     st.sidebar.title("⚙️ Settings")
@@ -1546,7 +1717,10 @@ def main():
             sent_alerts_key = f"sent_alert_ids::{instrument_label}"
             recent_alert_groups_key = f"recent_alert_groups::{instrument_label}"
             sent_alert_ids = set(st.session_state.get(sent_alerts_key, []))
-            recent_alert_groups = st.session_state.get(recent_alert_groups_key, {})
+            recent_alert_groups = prune_recent_alert_groups(
+                st.session_state.get(recent_alert_groups_key, {}),
+                max_age_minutes=ALERT_REPEAT_COOLDOWN_MINUTES,
+            )
 
             if alert_key not in st.session_state:
                 if 'timestamp' in signal_df_alert.columns and not signal_df_alert['timestamp'].empty:
@@ -1569,9 +1743,10 @@ def main():
 
                 for cluster in clustered_signals:
                     representative_signal = cluster['reference_signal']
-                    cluster_signature = build_alert_group_signature(representative_signal)
-                    last_group_timestamp = pd.to_datetime(recent_alert_groups.get(cluster_signature), errors='coerce')
+                    repeat_signature = build_repeat_alert_signature(representative_signal, instrument_label)
+                    last_group_timestamp = pd.to_datetime(recent_alert_groups.get(repeat_signature), errors='coerce', utc=True)
                     latest_cluster_timestamp = cluster.get('latest_timestamp')
+                    latest_cluster_timestamp = pd.to_datetime(latest_cluster_timestamp, errors='coerce', utc=True)
 
                     if (
                         pd.notna(last_group_timestamp)
@@ -1605,7 +1780,7 @@ def main():
                             sent_alert_ids.add(alert_id)
 
                     if pd.notna(latest_cluster_timestamp):
-                        recent_alert_groups[cluster_signature] = latest_cluster_timestamp.isoformat()
+                        recent_alert_groups[repeat_signature] = latest_cluster_timestamp.isoformat()
 
                 # Toon ook een korte samenvatting in de UI
                 if sent_cluster_count > 0:
