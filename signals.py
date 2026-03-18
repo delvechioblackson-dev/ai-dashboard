@@ -1897,73 +1897,65 @@ def main():
                 hide_index=True,
             )
 
-            preferred_order = ['1m', '5m', '15m']
-            # Always show 1m, 5m, 15m & 30m tabs (even if currently no signals),
-            # zodat alle timeframes altijd een eigen tab hebben.
-            unique_tfs = set(signal_df['timeframe'].dropna().unique()) | set(preferred_order)
-            unique_tfs_sorted = sorted(
-                unique_tfs,
-                key=lambda x: preferred_order.index(x) if x in preferred_order else len(preferred_order)
-            )
+            visible_signal_timeframes = ['15m']
+            signal_df = signal_df[signal_df['timeframe'].isin(visible_signal_timeframes)].reset_index(drop=True)
 
-            tabs = st.tabs([f"{tf} Signals" for tf in unique_tfs_sorted])
+            unique_tfs = [
+                timeframe
+                for timeframe in visible_signal_timeframes
+                if timeframe in set(signal_df['timeframe'].dropna().unique())
+            ]
+            if unique_tfs:
+                tabs = st.tabs([f"{tf} Signals" for tf in unique_tfs])
 
-            for tf, tab in zip(unique_tfs_sorted, tabs):
-                with tab:
-                    tf_df = signal_df[signal_df['timeframe'] == tf]
-                    if tf_df.empty:
-                        st.info(f"No signals for {tf}.")
-                    else:
-                        summary_col1, summary_col2, summary_col3 = st.columns(3)
-                        summary_col1.metric("Signals", len(tf_df))
-                        summary_col2.metric("Gem. kans", f"{tf_df['success_probability'].mean():.0f}%")
-                        summary_col3.metric("Buy / Sell", f"{(tf_df['signal'] == 'Buy').sum()} / {(tf_df['signal'] == 'Sell').sum()}")
+                for tf, tab in zip(unique_tfs, tabs):
+                    with tab:
+                        tf_df = signal_df[signal_df['timeframe'] == tf]
+                        if tf_df.empty:
+                            st.info(f"No signals for {tf}.")
+                        else:
+                            summary_col1, summary_col2, summary_col3 = st.columns(3)
+                            summary_col1.metric("Signals", len(tf_df))
+                            summary_col2.metric("Gem. kans", f"{tf_df['success_probability'].mean():.0f}%")
+                            summary_col3.metric("Buy / Sell", f"{(tf_df['signal'] == 'Buy').sum()} / {(tf_df['signal'] == 'Sell').sum()}")
 
-                        tf_display_df = tf_df[[col for col in display_columns if col in tf_df.columns]].copy()
-                        tf_display_df = tf_display_df.rename(columns={
-                            'price': 'entry_price',
-                            'stop_loss': 'sl',
-                            'take_profit': 'tp',
-                        })
-                        if 'timestamp' in tf_display_df.columns:
-                            tf_display_df['timestamp'] = tf_display_df['timestamp'].apply(format_timestamp)
-
-                        st.dataframe(
-                            tf_display_df,
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-
-                        with st.expander(f"Details & motivatie voor {tf}"):
-                            detail_columns = display_columns + [
-                                'zone_strength', 'nearest_key_level', 'confidence_notes'
-                            ]
-                            tf_detail_df = tf_df[[col for col in detail_columns if col in tf_df.columns]].copy()
-                            tf_detail_df = tf_detail_df.rename(columns={
+                            tf_display_df = tf_df[[col for col in display_columns if col in tf_df.columns]].copy()
+                            tf_display_df = tf_display_df.rename(columns={
                                 'price': 'entry_price',
                                 'stop_loss': 'sl',
                                 'take_profit': 'tp',
                             })
-                            if 'timestamp' in tf_detail_df.columns:
-                                tf_detail_df['timestamp'] = tf_detail_df['timestamp'].apply(format_timestamp)
+                            if 'timestamp' in tf_display_df.columns:
+                                tf_display_df['timestamp'] = tf_display_df['timestamp'].apply(format_timestamp)
+
                             st.dataframe(
-                                tf_detail_df,
+                                tf_display_df,
                                 use_container_width=True,
                                 hide_index=True,
                             )
+
+                            with st.expander(f"Details & motivatie voor {tf}"):
+                                detail_columns = display_columns + [
+                                    'zone_strength', 'nearest_key_level', 'confidence_notes'
+                                ]
+                                tf_detail_df = tf_df[[col for col in detail_columns if col in tf_df.columns]].copy()
+                                tf_detail_df = tf_detail_df.rename(columns={
+                                    'price': 'entry_price',
+                                    'stop_loss': 'sl',
+                                    'take_profit': 'tp',
+                                })
+                                if 'timestamp' in tf_detail_df.columns:
+                                    tf_detail_df['timestamp'] = tf_detail_df['timestamp'].apply(format_timestamp)
+                                st.dataframe(
+                                    tf_detail_df,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
         else:
             st.info("No signals generated based on current data.")
 
         # Dedicated sections for higher-timeframe market structure / supply-demand signals
         any_ms = False
-        if m5_ms_signals:
-            any_ms = True
-            st.subheader("📐 M5 Market Structure / Supply-Demand Signals")
-            ms5_df = sort_dataframe_by_timestamp(pd.DataFrame(m5_ms_signals))
-            if 'timestamp' in ms5_df.columns:
-                ms5_df['timestamp'] = ms5_df['timestamp'].apply(format_timestamp)
-            st.dataframe(ms5_df, use_container_width=True, hide_index=True)
-
         if m15_ms_signals:
             any_ms = True
             st.subheader("📐 M15 Market Structure / Supply-Demand Signals")
@@ -1973,7 +1965,7 @@ def main():
             st.dataframe(ms_df, use_container_width=True, hide_index=True)
 
         if not any_ms and show_supply_demand and supply_demand_zones:
-            st.info("No M5/M15/M30 market-structure signals for the current data.")
+            st.info("No M15 market-structure signals for the current data.")
 
         # Backtest op echte candledata
         if enable_test_zone and all_signals:
@@ -2123,43 +2115,43 @@ def main():
                         color = ''
                     return [color] * len(row)
 
-                preferred_order = ['1m', '5m', '15m']
-                # Always show 1m, 5m, 15m & 30m result tabs so higher-timeframe
-                # backtests have a clear place, even if no trades yet.
-                unique_tfs = set(results_df['timeframe'].dropna().unique()) | set(preferred_order)
-                unique_tfs_sorted = sorted(
-                    unique_tfs,
-                    key=lambda x: preferred_order.index(x) if x in preferred_order else len(preferred_order)
-                )
+                visible_result_timeframes = ['15m']
+                results_df = results_df[results_df['timeframe'].isin(visible_result_timeframes)].reset_index(drop=True)
+                unique_tfs = [
+                    timeframe
+                    for timeframe in visible_result_timeframes
+                    if timeframe in set(results_df['timeframe'].dropna().unique())
+                ]
 
-                tabs = st.tabs([f"{tf} Results" for tf in unique_tfs_sorted])
+                if unique_tfs:
+                    tabs = st.tabs([f"{tf} Results" for tf in unique_tfs])
 
-                for tf, tab in zip(unique_tfs_sorted, tabs):
-                    with tab:
-                        tf_df = results_df[results_df['timeframe'] == tf]
+                    for tf, tab in zip(unique_tfs, tabs):
+                        with tab:
+                            tf_df = results_df[results_df['timeframe'] == tf]
 
-                        if tf_df.empty:
-                            st.info(f"No trades for {tf} timeframe.")
-                        else:
-                            wins_tf = (tf_df['result'] == 'Win').sum()
-                            losses_tf = (tf_df['result'] == 'Loss').sum()
-                            opens_tf = (tf_df['result'] == 'Open').sum()
-                            total_pips_tf = tf_df['pips'].sum()
+                            if tf_df.empty:
+                                st.info(f"No trades for {tf} timeframe.")
+                            else:
+                                wins_tf = (tf_df['result'] == 'Win').sum()
+                                losses_tf = (tf_df['result'] == 'Loss').sum()
+                                opens_tf = (tf_df['result'] == 'Open').sum()
+                                total_pips_tf = tf_df['pips'].sum()
 
-                            st.markdown(
-                                f"**{tf} Wins:** {wins_tf} | **Losses:** {losses_tf} | **Open:** {opens_tf} | **Total Pips:** {total_pips_tf:.1f}"
-                            )
+                                st.markdown(
+                                    f"**{tf} Wins:** {wins_tf} | **Losses:** {losses_tf} | **Open:** {opens_tf} | **Total Pips:** {total_pips_tf:.1f}"
+                                )
 
-                            tf_display_results_df = tf_df.copy()
-                            if 'timestamp' in tf_display_results_df.columns:
-                                tf_display_results_df['timestamp'] = tf_display_results_df['timestamp'].apply(format_timestamp)
-                            if 'exit_time' in tf_display_results_df.columns:
-                                tf_display_results_df['exit_time'] = tf_display_results_df['exit_time'].apply(format_timestamp)
+                                tf_display_results_df = tf_df.copy()
+                                if 'timestamp' in tf_display_results_df.columns:
+                                    tf_display_results_df['timestamp'] = tf_display_results_df['timestamp'].apply(format_timestamp)
+                                if 'exit_time' in tf_display_results_df.columns:
+                                    tf_display_results_df['exit_time'] = tf_display_results_df['exit_time'].apply(format_timestamp)
 
-                            st.dataframe(
-                                tf_display_results_df.style.apply(highlight_result, axis=1),
-                                use_container_width=True,
-                            )
+                                st.dataframe(
+                                    tf_display_results_df.style.apply(highlight_result, axis=1),
+                                    use_container_width=True,
+                                )
 
         # Main chart
         st.subheader(f"📈 {instrument_label} - {primary_label.upper()} Chart with Multi-Timeframe Analysis")
