@@ -989,6 +989,33 @@ def format_timestamp(value):
     return timestamp.strftime("%d-%m-%y | %H:%M:%S")
 
 
+def sort_records_by_timestamp(records):
+    return sorted(
+        records,
+        key=lambda record: (
+            pd.to_datetime(record.get('timestamp'), errors='coerce'),
+            record.get('success_probability', 0),
+        ),
+        reverse=True,
+    )
+
+
+def sort_dataframe_by_timestamp(df, timestamp_column='timestamp'):
+    if df is None or df.empty or timestamp_column not in df.columns:
+        return df
+
+    sorted_df = df.copy()
+    sorted_df[timestamp_column] = pd.to_datetime(sorted_df[timestamp_column], errors='coerce')
+    sort_columns = [timestamp_column]
+    ascending = [False]
+
+    if 'success_probability' in sorted_df.columns:
+        sort_columns.append('success_probability')
+        ascending.append(False)
+
+    return sorted_df.sort_values(by=sort_columns, ascending=ascending).reset_index(drop=True)
+
+
 def get_timeframe_minutes(timeframe_label):
     mapping = {
         '1m': 1,
@@ -1352,14 +1379,7 @@ def main():
         all_signals = [sig for sig in all_signals if sig.get('timeframe') != '30m']
 
         if all_signals:
-            all_signals = sorted(
-                all_signals,
-                key=lambda sig: (
-                    sig.get('success_probability', 0),
-                    sig.get('timestamp', pd.Timestamp.min),
-                ),
-                reverse=True,
-            )
+            all_signals = sort_records_by_timestamp(all_signals)
 
         # Filter alle signalen op basis van nieuws-sentiment (optioneel)
         if show_news and news_sentiment is not None and all_signals:
@@ -1478,10 +1498,7 @@ def main():
         st.subheader("🎯 Trading Signals")
         if all_signals:
             signal_df = pd.DataFrame(all_signals)
-            signal_df = signal_df.sort_values(
-                by=['success_probability', 'timestamp'],
-                ascending=[False, False],
-            ).reset_index(drop=True)
+            signal_df = sort_dataframe_by_timestamp(signal_df)
 
             display_columns = [
                 'timestamp',
@@ -1503,7 +1520,7 @@ def main():
                 signal_df['timeframe'] = '1m'
 
             top_setups = signal_df.head(8)
-            st.markdown("### ⭐ Best setups nu")
+            st.markdown("### ⭐ Nieuwste signalen")
 
             best_levels = signal_df.head(3).reset_index(drop=True)
             st.markdown("### 📍 Instap-, SL- en TP-levels")
@@ -1600,13 +1617,17 @@ def main():
         if m5_ms_signals:
             any_ms = True
             st.subheader("📐 M5 Market Structure / Supply-Demand Signals")
-            ms5_df = pd.DataFrame(m5_ms_signals)
+            ms5_df = sort_dataframe_by_timestamp(pd.DataFrame(m5_ms_signals))
+            if 'timestamp' in ms5_df.columns:
+                ms5_df['timestamp'] = ms5_df['timestamp'].apply(format_timestamp)
             st.dataframe(ms5_df, use_container_width=True, hide_index=True)
 
         if m15_ms_signals:
             any_ms = True
             st.subheader("📐 M15 Market Structure / Supply-Demand Signals")
-            ms_df = pd.DataFrame(m15_ms_signals)
+            ms_df = sort_dataframe_by_timestamp(pd.DataFrame(m15_ms_signals))
+            if 'timestamp' in ms_df.columns:
+                ms_df['timestamp'] = ms_df['timestamp'].apply(format_timestamp)
             st.dataframe(ms_df, use_container_width=True, hide_index=True)
 
         if not any_ms and show_supply_demand and supply_demand_zones:
@@ -1707,6 +1728,7 @@ def main():
 
             results_df = pd.DataFrame(results)
             results_df = results_df[results_df['timeframe'] != '30m'].reset_index(drop=True)
+            results_df = sort_dataframe_by_timestamp(results_df)
 
             if not results_df.empty:
                 wins = (results_df['result'] == 'Win').sum()
