@@ -982,6 +982,13 @@ def format_trade_level(value):
     return f"{float(value):.5f}"
 
 
+def format_timestamp(value):
+    timestamp = pd.to_datetime(value, errors='coerce')
+    if pd.isna(timestamp):
+        return "n/a"
+    return timestamp.strftime("%d-%m-%y | %H:%M:%S")
+
+
 def get_timeframe_minutes(timeframe_label):
     mapping = {
         '1m': 1,
@@ -1195,7 +1202,7 @@ def main():
         )
         col3.metric(
             label="🕒 Laatste update candle (Amsterdam)",
-            value=latest_candle_time.strftime("%H:%M:%S"),
+            value=format_timestamp(latest_candle_time),
             delta=primary_label.upper(),
         )
 
@@ -1206,15 +1213,15 @@ def main():
 
         if data_source == 'live' and fetched_at is not None:
             st.caption(
-                f"Live candles opgehaald via Twelve Data om {pd.to_datetime(fetched_at).strftime('%H:%M:%S')} Amsterdam-tijd."
+                f"Live candles opgehaald via Twelve Data om {format_timestamp(fetched_at)} Amsterdam-tijd."
             )
         elif data_source == 'cache' and fetched_at is not None:
             st.caption(
-                f"UI refresht uit lokale cache om onder de free-plan limiet te blijven. Laatste API-call: {pd.to_datetime(fetched_at).strftime('%H:%M:%S')} ({int(cache_age)}s geleden)."
+                f"UI refresht uit lokale cache om onder de free-plan limiet te blijven. Laatste API-call: {format_timestamp(fetched_at)} ({int(cache_age)}s geleden)."
             )
         elif data_source == 'stale_cache' and fetched_at is not None:
             st.warning(
-                f"Twelve Data werd tijdelijk niet opnieuw aangeroepen ({api_error}). Laatste bruikbare candles uit cache van {pd.to_datetime(fetched_at).strftime('%H:%M:%S')} worden getoond."
+                f"Twelve Data werd tijdelijk niet opnieuw aangeroepen ({api_error}). Laatste bruikbare candles uit cache van {format_timestamp(fetched_at)} worden getoond."
             )
 
         if df_primary['Volume'].notna().any():
@@ -1404,7 +1411,7 @@ def main():
                     price = sig.get('price', np.nan)
                     stop_loss = sig.get('stop_loss', np.nan)
                     take_profit = sig.get('take_profit', np.nan)
-                    ts_str = sig.get('timestamp')
+                    ts_str = format_timestamp(sig.get('timestamp'))
 
                     sl_text = f"SL {stop_loss:.5f}" if pd.notna(stop_loss) else "SL n/a"
                     tp_text = f"TP {take_profit:.5f}" if pd.notna(take_profit) else "TP n/a"
@@ -1430,7 +1437,7 @@ def main():
                     desc = art.get("description") or ""
                     src = art.get("source") or ""
                     url = art.get("url") or ""
-                    when = art.get("publishedAt") or ""
+                    when = format_timestamp(art.get("publishedAt")) if art.get("publishedAt") else ""
 
                     st.markdown(
                         f"**{title}**  \n"
@@ -1523,6 +1530,8 @@ def main():
                 'stop_loss': 'sl',
                 'take_profit': 'tp',
             })
+            if 'timestamp' in display_df.columns:
+                display_df['timestamp'] = display_df['timestamp'].apply(format_timestamp)
             st.dataframe(
                 display_df,
                 use_container_width=True,
@@ -1557,6 +1566,8 @@ def main():
                             'stop_loss': 'sl',
                             'take_profit': 'tp',
                         })
+                        if 'timestamp' in tf_display_df.columns:
+                            tf_display_df['timestamp'] = tf_display_df['timestamp'].apply(format_timestamp)
 
                         st.dataframe(
                             tf_display_df,
@@ -1574,6 +1585,8 @@ def main():
                                 'stop_loss': 'sl',
                                 'take_profit': 'tp',
                             })
+                            if 'timestamp' in tf_detail_df.columns:
+                                tf_detail_df['timestamp'] = tf_detail_df['timestamp'].apply(format_timestamp)
                             st.dataframe(
                                 tf_detail_df,
                                 use_container_width=True,
@@ -1744,8 +1757,14 @@ def main():
                                 f"**{tf} Wins:** {wins_tf} | **Losses:** {losses_tf} | **Open:** {opens_tf} | **Total Pips:** {total_pips_tf:.1f}"
                             )
 
+                            tf_display_results_df = tf_df.copy()
+                            if 'timestamp' in tf_display_results_df.columns:
+                                tf_display_results_df['timestamp'] = tf_display_results_df['timestamp'].apply(format_timestamp)
+                            if 'exit_time' in tf_display_results_df.columns:
+                                tf_display_results_df['exit_time'] = tf_display_results_df['exit_time'].apply(format_timestamp)
+
                             st.dataframe(
-                                tf_df.style.apply(highlight_result, axis=1),
+                                tf_display_results_df.style.apply(highlight_result, axis=1),
                                 use_container_width=True,
                             )
 
