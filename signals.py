@@ -13,6 +13,8 @@ TELEGRAM_CHAT_ID_DEFAULT = ""
 TWELVEDATA_API_KEY_DEFAULT = ""
 APP_TIMEZONE = "Europe/Amsterdam"
 TWELVEDATA_MIN_FETCH_SECONDS = 60
+ALERT_PRICE_TOLERANCE = 0.0002
+ALERT_TIME_TOLERANCE_MINUTES = 3
 
 
 def get_config_value(name, fallback=""):
@@ -989,6 +991,125 @@ def format_timestamp(value):
     return timestamp.strftime("%d-%m-%y | %H:%M:%S")
 
 
+def join_human_readable(items):
+    cleaned_items = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned_items:
+        return ""
+    if len(cleaned_items) == 1:
+        return cleaned_items[0]
+    if len(cleaned_items) == 2:
+        return f"{cleaned_items[0]} en {cleaned_items[1]}"
+    return f"{', '.join(cleaned_items[:-1])} en {cleaned_items[-1]}"
+
+
+def combine_signal_types(signal_types):
+    unique_types = list(dict.fromkeys(str(signal_type).strip() for signal_type in signal_types if str(signal_type).strip()))
+    if not unique_types:
+        return ""
+    if len(unique_types) == 1:
+        return unique_types[0]
+
+    split_types = [signal_type.split() for signal_type in unique_types]
+    prefix_length = 0
+    for word_group in zip(*split_types):
+        if len(set(word_group)) == 1:
+            prefix_length += 1
+        else:
+            break
+
+    if prefix_length == 0:
+        return join_human_readable(unique_types)
+
+    prefix = " ".join(split_types[0][:prefix_length])
+    suffixes = [" ".join(words[prefix_length:]).strip() for words in split_types]
+    if not all(suffixes):
+        return join_human_readable(unique_types)
+
+    return f"{prefix} {join_human_readable(suffixes)}"
+
+
+def price_values_match(left_value, right_value, tolerance=ALERT_PRICE_TOLERANCE):
+    if pd.isna(left_value) or pd.isna(right_value):
+        return True
+    return abs(float(left_value) - float(right_value)) <= tolerance
+
+
+def signals_match_for_alert_group(reference_signal, candidate_signal, price_tolerance=ALERT_PRICE_TOLERANCE, time_tolerance_minutes=ALERT_TIME_TOLERANCE_MINUTES):
+    reference_timestamp = pd.to_datetime(reference_signal.get('timestamp'), errors='coerce')
+    candidate_timestamp = pd.to_datetime(candidate_signal.get('timestamp'), errors='coerce')
+    if pd.isna(reference_timestamp) or pd.isna(candidate_timestamp):
+        return False
+
+    if abs(candidate_timestamp - reference_timestamp) > pd.Timedelta(minutes=time_tolerance_minutes):
+        return False
+
+    for field_name in ('timeframe', 'signal'):
+        if str(reference_signal.get(field_name, '')) != str(candidate_signal.get(field_name, '')):
+            return False
+
+    for field_name in ('price', 'stop_loss', 'take_profit'):
+        if not price_values_match(reference_signal.get(field_name, np.nan), candidate_signal.get(field_name, np.nan), tolerance=price_tolerance):
+            return False
+
+    return True
+
+
+def build_alert_group_signature(signal, price_tolerance=ALERT_PRICE_TOLERANCE):
+    def _bucket(value):
+        if pd.isna(value):
+            return 'na'
+        return str(int(round(float(value) / price_tolerance)))
+
+    return "|".join([
+        str(signal.get('timeframe', '')),
+        str(signal.get('signal', '')),
+        _bucket(signal.get('price', np.nan)),
+        _bucket(signal.get('stop_loss', np.nan)),
+        _bucket(signal.get('take_profit', np.nan)),
+    ])
+
+
+def cluster_signals_for_alerts(signal_df, price_tolerance=ALERT_PRICE_TOLERANCE, time_tolerance_minutes=ALERT_TIME_TOLERANCE_MINUTES):
+    if signal_df is None or signal_df.empty:
+        return []
+
+    sorted_signal_df = signal_df.sort_values('timestamp').reset_index(drop=True)
+    clusters = []
+
+    for _, row in sorted_signal_df.iterrows():
+        signal = row.to_dict()
+        signal_timestamp = pd.to_datetime(signal.get('timestamp'), errors='coerce')
+        assigned_cluster = None
+
+        for cluster in clusters:
+            if signals_match_for_alert_group(
+                cluster['reference_signal'],
+                signal,
+                price_tolerance=price_tolerance,
+                time_tolerance_minutes=time_tolerance_minutes,
+            ):
+                assigned_cluster = cluster
+                break
+
+        if assigned_cluster is None:
+            clusters.append({
+                'reference_signal': signal,
+                'signals': [signal],
+                'alert_ids': [signal.get('alert_id')],
+                'latest_timestamp': signal_timestamp,
+            })
+            continue
+
+        assigned_cluster['signals'].append(signal)
+        assigned_cluster['alert_ids'].append(signal.get('alert_id'))
+        if pd.notna(signal_timestamp) and (
+            pd.isna(assigned_cluster['latest_timestamp']) or signal_timestamp > assigned_cluster['latest_timestamp']
+        ):
+            assigned_cluster['latest_timestamp'] = signal_timestamp
+
+    return clusters
+
+
 def sort_records_by_timestamp(records):
     return sorted(
         records,
@@ -1405,7 +1526,9 @@ def main():
             # Unieke key per instrument, zodat elk valutapaar apart telt
             alert_key = f"last_alert_ts::{instrument_label}"
             sent_alerts_key = f"sent_alert_ids::{instrument_label}"
+            recent_alert_groups_key = f"recent_alert_groups::{instrument_label}"
             sent_alert_ids = set(st.session_state.get(sent_alerts_key, []))
+            recent_alert_groups = st.session_state.get(recent_alert_groups_key, {})
 
             if alert_key not in st.session_state:
                 if 'timestamp' in signal_df_alert.columns and not signal_df_alert['timestamp'].empty:
@@ -1423,30 +1546,56 @@ def main():
             new_signals = signal_df_alert[new_mask & unsent_mask]
 
             if not new_signals.empty:
-                # Stuur per signaal een korte alert
-                for _, sig in new_signals.sort_values('timestamp').iterrows():
-                    tf = sig.get('timeframe', primary_label)
-                    direction = sig.get('signal', '')
-                    sig_type = sig.get('type', '')
-                    price = sig.get('price', np.nan)
-                    stop_loss = sig.get('stop_loss', np.nan)
-                    take_profit = sig.get('take_profit', np.nan)
-                    ts_str = format_timestamp(sig.get('timestamp'))
+                sent_cluster_count = 0
+                clustered_signals = cluster_signals_for_alerts(new_signals)
+
+                for cluster in clustered_signals:
+                    representative_signal = cluster['reference_signal']
+                    cluster_signature = build_alert_group_signature(representative_signal)
+                    last_group_timestamp = pd.to_datetime(recent_alert_groups.get(cluster_signature), errors='coerce')
+                    latest_cluster_timestamp = cluster.get('latest_timestamp')
+
+                    if (
+                        pd.notna(last_group_timestamp)
+                        and pd.notna(latest_cluster_timestamp)
+                        and latest_cluster_timestamp - last_group_timestamp <= pd.Timedelta(minutes=ALERT_TIME_TOLERANCE_MINUTES)
+                    ):
+                        for alert_id in cluster['alert_ids']:
+                            if alert_id:
+                                sent_alert_ids.add(alert_id)
+                        continue
+
+                    tf = representative_signal.get('timeframe', primary_label)
+                    direction = representative_signal.get('signal', '')
+                    price = representative_signal.get('price', np.nan)
+                    stop_loss = representative_signal.get('stop_loss', np.nan)
+                    take_profit = representative_signal.get('take_profit', np.nan)
+                    ts_str = format_timestamp(representative_signal.get('timestamp'))
+                    combined_type = combine_signal_types([signal.get('type', '') for signal in cluster['signals']])
 
                     sl_text = f"SL {stop_loss:.5f}" if pd.notna(stop_loss) else "SL n/a"
                     tp_text = f"TP {take_profit:.5f}" if pd.notna(take_profit) else "TP n/a"
                     msg = (
                         f"{instrument_label} | {tf} {direction} @ {price:.5f} | "
-                        f"{sl_text} | {tp_text} | {sig_type} | {ts_str}"
+                        f"{sl_text} | {tp_text} | {combined_type} | {ts_str}"
                     )
                     send_telegram_alert(msg)
-                    sent_alert_ids.add(sig['alert_id'])
+                    sent_cluster_count += 1
+
+                    for alert_id in cluster['alert_ids']:
+                        if alert_id:
+                            sent_alert_ids.add(alert_id)
+
+                    if pd.notna(latest_cluster_timestamp):
+                        recent_alert_groups[cluster_signature] = latest_cluster_timestamp.isoformat()
 
                 # Toon ook een korte samenvatting in de UI
-                st.success(f"🔔 {len(new_signals)} nieuwe signalen verstuurd als alert.")
+                if sent_cluster_count > 0:
+                    st.success(f"🔔 {sent_cluster_count} nieuwe signalen verstuurd als alert.")
 
                 st.session_state[alert_key] = new_signals['timestamp'].max()
                 st.session_state[sent_alerts_key] = list(sent_alert_ids)
+                st.session_state[recent_alert_groups_key] = recent_alert_groups
 
         # Nieuwssectie onder de signalen
         if show_news:
