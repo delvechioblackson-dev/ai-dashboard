@@ -1309,8 +1309,15 @@ def inject_dashboard_styles():
             background: var(--surface-card);
             border: 1px solid var(--border-soft);
             border-radius: 16px;
-            overflow: hidden;
+            overflow: visible;
             box-shadow: 0 8px 24px rgba(31, 53, 71, 0.04);
+        }
+
+        div[data-testid="stDataFrame"] > div,
+        div[data-testid="stTable"] > div {
+            overflow-x: auto !important;
+            overflow-y: auto !important;
+            border-radius: 16px;
         }
 
         div[data-testid="stDataFrame"] thead tr th,
